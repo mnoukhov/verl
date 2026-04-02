@@ -120,7 +120,7 @@ ACTOR_FSDP_CONFIG="
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$USP_SIZE"
 
 # Megatron parallelism config
-TP_SIZE=2
+TP_SIZE=1
 CP_SIZE=1
 PP_SIZE=1
 VPP_SIZE=null
