@@ -76,7 +76,7 @@ critic_warmup=0
 # ================================== Data/Model/Config =================================
 
 # Node Info
-NNODES=${NNODES:-2}
+NNODES=${NNODES:-1}
 
 # wandb
 backend=megatron # fsdp, fsdp2, megatron
@@ -84,9 +84,9 @@ project_name=Qwen3-30B-A3B-Base-dapo-math-17k
 experiment_name="${backend}-${NNODES}nodes-${LOSS_MODE}-low${clip_ratio_low}-high${clip_ratio_high}"
 
 # Paths
-DATA_ROOT=${DATA_ROOT:-"${HOME}/verl"}
+DATA_ROOT=${DATA_ROOT:-"/weka/oe-adapt-default/michaeln/verl"}
 CKPTS_DIR=${CKPTS_DIR:-"${DATA_ROOT}/ckpts/${project_name}/${experiment_name}"}
-MODEL_PATH=${MODEL_PATH:-"${DATA_ROOT}/models/Qwen3-30B-A3B-Base"}
+MODEL_PATH=${MODEL_PATH:-"/weka/oe-adapt-default/allennlp/.cache/hub/models--Qwen--Qwen3-30B-A3B-Base/snapshots/1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9"}
 TRAIN_FILE=${TRAIN_FILE:-"${DATA_ROOT}/data/dapo-math-17k.parquet"}
 TEST_FILE=${TEST_FILE:-"${DATA_ROOT}/data/aime-2024.parquet"}
 
@@ -223,7 +223,7 @@ REWARD_CONFIG="
     +reward.reward_kwargs.overlong_buffer_cfg.log=False \
     +reward.reward_kwargs.max_resp_len=${max_response_length}"
 
-python3 -m verl.trainer.main_ppo \
+/usr/bin/python -m verl.trainer.main_ppo \
     --config-path=./config \
     --config-name=$CONFIG_NAME \
     algorithm.adv_estimator=$adv_estimator \
