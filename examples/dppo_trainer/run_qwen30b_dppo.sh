@@ -85,7 +85,7 @@ experiment_name="${backend}-${NNODES}nodes-${LOSS_MODE}-low${clip_ratio_low}-hig
 
 # Paths
 DATA_ROOT=${DATA_ROOT:-"/weka/oe-adapt-default/michaeln/verl"}
-CKPTS_DIR=${CKPTS_DIR:-"${DATA_ROOT}/ckpts/${project_name}/${experiment_name}"}
+CKPTS_DIR=${CKPTS_DIR:-"/weka/oe-adapt-default/allennlp/deletable_checkpoint_states/michaeln/${experiment_name}"}
 MODEL_PATH=${MODEL_PATH:-"/weka/oe-adapt-default/allennlp/.cache/hub/models--Qwen--Qwen3-30B-A3B-Base/snapshots/1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9"}
 TRAIN_FILE=${TRAIN_FILE:-"${DATA_ROOT}/data/dapo-math-17k.parquet"}
 TEST_FILE=${TEST_FILE:-"${DATA_ROOT}/data/aime-2024.parquet"}
