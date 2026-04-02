@@ -29,6 +29,9 @@ gantry run \
     --docker-image verlai/verl:vllm018.dev1 \
     --system-python \
     --no-logs \
+    --env WANDB_ENTITY=mnoukhov \
+    --secret-env HF_TOKEN=michaeln_HF_TOKEN \
+    --secret-env WANDB_API_KEY=michaeln_WANDB_API_KEY \
     --install "echo 'Skipping Gantry Python setup'" \
     --weka=oe-adapt-default:/weka/oe-adapt-default \
     -- "${cmd[@]}"
