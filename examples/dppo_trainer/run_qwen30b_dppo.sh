@@ -81,6 +81,7 @@ NNODES=${NNODES:-1}
 # wandb
 backend=megatron # fsdp, fsdp2, megatron
 project_name=Qwen3-30B-A3B-Base-dapo-math-17k
+wandb_project_name=verl
 experiment_name="${backend}-${NNODES}nodes-${LOSS_MODE}-low${clip_ratio_low}-high${clip_ratio_high}"
 
 # Paths
@@ -245,7 +246,7 @@ REWARD_CONFIG="
     trainer.use_legacy_worker_impl=disable \
     trainer.critic_warmup=$critic_warmup \
     trainer.logger=['console','wandb'] \
-    trainer.project_name=$project_name \
+    trainer.project_name=$wandb_project_name \
     trainer.experiment_name=$experiment_name \
     trainer.default_local_dir=$CKPTS_DIR \
     trainer.n_gpus_per_node=8 \
