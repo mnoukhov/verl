@@ -103,6 +103,7 @@ overlong_penalty_factor=1.0
 
 train_batch_size=256
 ppo_mini_batch_size=32
+ppo_micro_batch_size_per_gpu=1
 n_resp_per_prompt=16
 n_resp_per_prompt_val=1
 
@@ -160,6 +161,7 @@ ACTOR_CONFIG="
     actor_rollout_ref.actor.policy_loss.loss_mode=${LOSS_MODE} \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=$ppo_mini_batch_size \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu \
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=$actor_max_token_len_per_gpu"
 
 # Critic model config
