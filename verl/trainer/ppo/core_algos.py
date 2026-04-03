@@ -1485,7 +1485,7 @@ def compute_policy_loss_tvpo(
     assert config is not None
     assert not isinstance(config, AlgoConfig)
     # Note: the clip_ratio is different from the standard PPO, it is the TV divergence threshold for DPPO.
-    clip_divergence = config.clip_ratio/2
+    clip_divergence = config.clip_ratio / 2
     # clip_divergence_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_divergence
     # clip_divergence_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_divergence
 
@@ -1494,7 +1494,7 @@ def compute_policy_loss_tvpo(
     negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
     ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
-    ppo_tv = verl_F.masked_mean(torch.abs(ratio - 1.0), response_mask)/2
+    ppo_tv = verl_F.masked_mean(torch.abs(ratio - 1.0), response_mask) / 2
 
     # Instead of dual-clip PPO, we use truncated importance sampling (TIS) to clip the policy loss.
     # However, a large threshold is recommended to avoid performance degradation due to the truncation bias.
@@ -1506,7 +1506,7 @@ def compute_policy_loss_tvpo(
     # Compute valid mask for DPPO-Binary-TV
     prob = torch.exp(log_prob)
     old_prob = torch.exp(old_log_prob)
-    
+
     pg_losses = -advantages * truncated_ratio * log_prob
     pg_losses_detached = pg_losses.detach()
     if ppo_tv <= clip_divergence:
