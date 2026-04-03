@@ -110,7 +110,7 @@ train_batch_size=256
 ppo_mini_batch_size=32
 ppo_micro_batch_size_per_gpu=1
 n_resp_per_prompt=16
-n_resp_per_prompt_val=1
+n_resp_per_prompt_val=32
 
 # ===================================== Training ======================================
 actor_max_token_len_per_gpu=$(((max_prompt_length + max_response_length) * 1))
@@ -263,9 +263,10 @@ ROLLOUT_CONFIG="
     actor_rollout_ref.rollout.gpu_memory_utilization=$gpu_memory_utilization \
     actor_rollout_ref.rollout.n=$n_resp_per_prompt \
     actor_rollout_ref.rollout.calculate_log_probs=True \
-    actor_rollout_ref.rollout.val_kwargs.top_p=1.0 \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=True \
+    actor_rollout_ref.rollout.val_kwargs.top_p=0.95 \
     actor_rollout_ref.rollout.val_kwargs.top_k=-1 \
-    actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
+    actor_rollout_ref.rollout.val_kwargs.temperature=0.7 \
     actor_rollout_ref.rollout.val_kwargs.n=$n_resp_per_prompt_val"
 
 # ===================================== Reward =====================================
