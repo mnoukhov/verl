@@ -24,6 +24,7 @@ gantry run \
     --cluster ai2/jupiter \
     --priority high \
     --gpus 8 \
+    --replicas 2 \
     --timeout 5h \
     --task-name gantry-verl \
     --docker-image verlai/verl:vllm018.dev1 \
