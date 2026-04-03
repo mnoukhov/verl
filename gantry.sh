@@ -7,6 +7,7 @@ beaker_whoami="${BEAKER_WHOAMI:-$(beaker account whoami --format json | jq -r '.
 if (($# == 0)); then
     cmd=(
         env
+        NNODES=1
         LOSS_MODE=vanilla
         CLIP_LOW=0.2
         CLIP_HIGH=0.28
@@ -24,7 +25,6 @@ gantry run \
     --cluster ai2/jupiter \
     --priority high \
     --gpus 8 \
-    --replicas 2 \
     --timeout 5h \
     --task-name gantry-verl \
     --docker-image verlai/verl:vllm018.dev1 \
