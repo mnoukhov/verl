@@ -1450,6 +1450,94 @@ def compute_policy_loss_dppo_tv(
     return pg_loss, pg_metrics
 
 
+@register_policy_loss("tvpo")
+def compute_policy_loss_tvpo(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    loss_agg_mode: str = "token-mean",
+    config: Optional[ActorConfig] = None,
+    rollout_is_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """
+    Compute the clipped policy objective and related metrics for TVPO.
+
+    See https://arxiv.org/pdf/2602.04879 for more details.
+
+    Args:
+        old_log_prob (torch.Tensor):
+            Log-probabilities of actions under the old policy, shape (batch_size, response_length).
+        log_prob (torch.Tensor):
+            Log-probabilities of actions under the current policy, shape (batch_size, response_length).
+        advantages (torch.Tensor):
+            Advantage estimates for each action, shape (batch_size, response_length).
+        response_mask (torch.Tensor):
+            Mask indicating which tokens to include in the loss, shape (batch_size, response_length).
+        loss_agg_mode (str, optional):
+            Aggregation mode for `agg_loss`. Defaults to "token-mean".
+        config: `(verl.trainer.config.ActorConfig)`:
+            config for the actor.
+        rollout_log_probs: `(torch.Tensor)`:
+            log probabilities of actions under the rollout policy, shape (batch_size, response_length).
+    """
+
+    assert config is not None
+    assert not isinstance(config, AlgoConfig)
+    # Note: the clip_ratio is different from the standard PPO, it is the TV divergence threshold for DPPO.
+    clip_divergence = config.clip_ratio/2
+    # clip_divergence_low = config.clip_ratio_low if config.clip_ratio_low is not None else clip_divergence
+    # clip_divergence_high = config.clip_ratio_high if config.clip_ratio_high is not None else clip_divergence
+
+    negative_approx_kl = log_prob - old_log_prob
+    # Clamp negative_approx_kl for stability
+    negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
+    ratio = torch.exp(negative_approx_kl)
+    ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    ppo_tv = verl_F.masked_mean(torch.abs(ratio - 1.0), response_mask)/2
+
+    # Instead of dual-clip PPO, we use truncated importance sampling (TIS) to clip the policy loss.
+    # However, a large threshold is recommended to avoid performance degradation due to the truncation bias.
+    # See Section 5.4 in https://arxiv.org/pdf/2602.04879 for more details.
+    clip_ratio_c = config.get("clip_ratio_c", 20.0)
+    truncated_ratio = torch.clamp(ratio, max=clip_ratio_c)
+    truncated_ratio = truncated_ratio.detach()
+
+    # Compute valid mask for DPPO-Binary-TV
+    prob = torch.exp(log_prob)
+    old_prob = torch.exp(old_log_prob)
+    
+    pg_losses = -advantages * truncated_ratio * log_prob
+    pg_losses_detached = pg_losses.detach()
+    if ppo_tv <= clip_divergence:
+        valid_mask = torch.ones_like(ppo_tv)
+    else:
+        main_grad = advantages
+        ref_grad = torch.sign(prob - old_prob)
+        valid_mask = (main_grad * ref_grad) <= 0
+        pg_losses = torch.where(valid_mask, pg_losses, pg_losses_detached)
+    valid_mask = valid_mask.detach().float()
+
+    # Apply rollout correction weights if provided
+    if rollout_is_weights is not None:
+        pg_losses = pg_losses * rollout_is_weights
+
+    pg_loss = agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode, **config.global_batch_info
+    )
+
+    pg_clipfrac = verl_F.masked_mean((1.0 - valid_mask).float(), response_mask)
+    pg_clipfrac_lower = verl_F.masked_mean((ratio > clip_ratio_c).float() * valid_mask, response_mask)
+
+    pg_metrics = {
+        "actor/pg_clipfrac": pg_clipfrac.detach().item(),
+        "actor/ppo_kl": ppo_kl.detach().item(),
+        "actor/ppo_tv": ppo_tv.detach().item(),
+        "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
+    }
+    return pg_loss, pg_metrics
+
+
 @register_policy_loss("dppo_kl")
 def compute_policy_loss_dppo_kl(
     old_log_prob: torch.Tensor,
