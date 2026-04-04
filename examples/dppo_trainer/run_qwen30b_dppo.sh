@@ -307,8 +307,8 @@ REWARD_CONFIG="
     trainer.nnodes=$NNODES \
     trainer.val_before_train=False \
     trainer.log_val_generations=100 \
-    trainer.save_freq=25 \
-    trainer.test_freq=25 \
+    trainer.save_freq=10 \
+    trainer.test_freq=10 \
     trainer.total_epochs=10 \
     trainer.total_training_steps=200 \
     $ACTOR_CONFIG \
