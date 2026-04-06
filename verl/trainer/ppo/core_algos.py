@@ -1250,6 +1250,15 @@ def compute_policy_loss(
     negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
     ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
+    per_sample_tv = verl_F.masked_mean(torch.abs(ratio - 1.0), response_mask, axis=-1) / 2
+    if index is None:
+        prompt_tv_unique = per_sample_tv
+    else:
+        prompt_index = as_torch_index(index, device=per_sample_tv.device)
+        prompt_count = torch.bincount(prompt_index).to(per_sample_tv.dtype)
+        prompt_tv_sum = torch.zeros_like(prompt_count).index_add_(0, prompt_index, per_sample_tv)
+        prompt_tv_unique = prompt_tv_sum / prompt_count.clamp_min(1.0)
+    ppo_tv = prompt_tv_unique.mean()
 
     pg_losses1 = -advantages * ratio
     if cliprange_low is None:
@@ -1366,6 +1375,11 @@ def compute_policy_loss_vanilla(
     pg_metrics = {
         "actor/pg_clipfrac": pg_clipfrac.detach().item(),
         "actor/ppo_kl": ppo_kl.detach().item(),
+        "actor/ppo_tv": ppo_tv.detach().item(),
+        "actor/ppo_tv_prompt/min": prompt_tv_unique.min().detach().item(),
+        "actor/ppo_tv_prompt/max": prompt_tv_unique.max().detach().item(),
+        "actor/ppo_tv_prompt/std": prompt_tv_unique.std(unbiased=False).detach().item(),
+        "actor/ppo_tv_prompt/hist": prompt_tv_unique.detach().cpu().tolist(),
         "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
     }
     return pg_loss, pg_metrics

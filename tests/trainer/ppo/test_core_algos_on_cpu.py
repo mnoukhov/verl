@@ -25,6 +25,7 @@ from verl.trainer.ppo.core_algos import (
     compute_gae_advantage_return,
     compute_grpo_outcome_advantage,
     compute_grpo_vectorized_outcome_advantage,
+    compute_policy_loss_vanilla,
     compute_policy_loss_tvpo,
     compute_rloo_outcome_advantage,
     compute_rloo_vectorized_outcome_advantage,
@@ -295,6 +296,45 @@ def test_tvpo_uses_prompt_level_tv_and_logs_histogram():
 
     assert metrics["actor/ppo_tv"] == pytest.approx(0.5)
     assert metrics["actor/pg_clipfrac"] == pytest.approx(0.5)
+    assert metrics["actor/ppo_tv_prompt/min"] == pytest.approx(0.0)
+    assert metrics["actor/ppo_tv_prompt/max"] == pytest.approx(1.0)
+    assert metrics["actor/ppo_tv_prompt/std"] == pytest.approx(0.5)
+    assert metrics["actor/ppo_tv_prompt/hist"] == pytest.approx([0.0, 1.0])
+
+
+def test_vanilla_logs_prompt_level_tv_histogram():
+    config = OmegaConf.create(
+        {
+            "clip_ratio": 0.2,
+            "clip_ratio_c": 3.0,
+            "global_batch_info": {},
+        }
+    )
+
+    old_log_prob = torch.zeros(4, 2)
+    log_prob = torch.tensor(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [np.log(3.0), np.log(3.0)],
+            [np.log(3.0), np.log(3.0)],
+        ],
+        dtype=torch.float32,
+    )
+    advantages = torch.ones(4, 2)
+    response_mask = torch.ones(4, 2)
+    index = np.array([0, 0, 1, 1], dtype=np.int64)
+
+    _, metrics = compute_policy_loss_vanilla(
+        old_log_prob=old_log_prob,
+        log_prob=log_prob,
+        advantages=advantages,
+        response_mask=response_mask,
+        config=config,
+        index=index,
+    )
+
+    assert metrics["actor/ppo_tv"] == pytest.approx(0.5)
     assert metrics["actor/ppo_tv_prompt/min"] == pytest.approx(0.0)
     assert metrics["actor/ppo_tv_prompt/max"] == pytest.approx(1.0)
     assert metrics["actor/ppo_tv_prompt/std"] == pytest.approx(0.5)
