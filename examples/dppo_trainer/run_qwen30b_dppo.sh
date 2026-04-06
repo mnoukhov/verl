@@ -39,9 +39,9 @@ elif [[ $LOSS_MODE == "vanilla" ]]; then
     clip_ratio_high=${CLIP_HIGH:-0.28}
 elif [[ $LOSS_MODE == "tvpo" ]]; then
     # GRPO baseline
-    clip_ratio=0.005
+    clip_ratio=${CLIP_HIGH:-0.005}
     clip_ratio_low=${CLIP_LOW:-0.15}
-    clip_ratio_high=${CLIP_HIGH:-0.15}
+    clip_ratio_high=${CLIP_HIGH:-0.005}
 else
     echo "Invalid loss mode: $LOSS_MODE"
     exit 1
