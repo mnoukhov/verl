@@ -22,7 +22,7 @@ fi
 gantry run \
     --workspace ai2/oe-adapt-code \
     --budget ai2/oe-adapt \
-    --cluster ai2/jupiter \
+    --cluster ai2/saturn \
     --priority high \
     --gpus 8 \
     --timeout 5h \

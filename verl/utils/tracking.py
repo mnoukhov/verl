@@ -26,6 +26,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import orjson
 from packaging.version import Version
 
@@ -191,7 +192,29 @@ class Tracking:
     def log(self, data, step, backend=None):
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
-                logger_instance.log(data=data, step=step)
+                logger_instance.log(data=self._prepare_data_for_backend(data, default_backend), step=step)
+
+    def _prepare_data_for_backend(self, data, backend):
+        if backend == "wandb":
+            wandb = self.logger.get("wandb")
+            prepared = {}
+            for key, value in data.items():
+                if key.endswith("/hist"):
+                    hist_values = np.asarray(value, dtype=np.float32).reshape(-1)
+                    if hist_values.size > 0:
+                        prepared[key] = wandb.Histogram(hist_values)
+                else:
+                    prepared[key] = value
+            return prepared
+
+        if backend in {"mlflow", "tensorboard", "clearml", "console", "swanlab", "vemlp_wandb", "trackio"}:
+            return {
+                key: value
+                for key, value in data.items()
+                if isinstance(value, (int, float, np.integer, np.floating))
+            }
+
+        return data
 
     def finish(self, exit_code: int = 0):
         """Flush and finalize every configured backend exactly once."""
@@ -560,8 +583,9 @@ class _TensorboardAdapter:
         self.writer = SummaryWriter(tensorboard_dir)
 
     def log(self, data, step):
-        for key in data:
-            self.writer.add_scalar(key, data[key], step)
+        for key, value in data.items():
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                self.writer.add_scalar(key, value, step)
 
     def finish(self):
         self.writer.close()
