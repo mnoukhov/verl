@@ -42,7 +42,8 @@ PolicyLossFn = Callable[
         torch.Tensor,  # response_mask
         str,  # loss_agg_mode
         Optional[DictConfig | ActorConfig],  # config
-        torch.Tensor | None,  # rollout_log_probs
+        torch.Tensor | None,  # rollout_is_weights
+        np.ndarray | torch.Tensor | None,  # index
     ],
     tuple[torch.Tensor, dict[str, Any]],
 ]
@@ -1284,6 +1285,7 @@ def compute_policy_loss_vanilla(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for PPO.
@@ -1378,6 +1380,7 @@ def compute_policy_loss_dppo_tv(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for DPPO-Binary-TV.
@@ -1459,6 +1462,7 @@ def compute_policy_loss_tvpo(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for TVPO.
@@ -1494,7 +1498,19 @@ def compute_policy_loss_tvpo(
     negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
     ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
-    ppo_tv = verl_F.masked_mean(torch.abs(ratio - 1.0), response_mask) / 2
+
+    per_sample_tv = verl_F.masked_mean(torch.abs(ratio - 1.0), response_mask, axis=-1) / 2
+    if index is None:
+        prompt_tv_per_sample = per_sample_tv
+        prompt_tv_unique = per_sample_tv
+    else:
+        prompt_index = as_torch_index(index, device=per_sample_tv.device)
+        prompt_count = torch.bincount(prompt_index).to(per_sample_tv.dtype)
+        prompt_tv_sum = torch.zeros_like(prompt_count).index_add_(0, prompt_index, per_sample_tv)
+        prompt_tv_unique = prompt_tv_sum / prompt_count.clamp_min(1.0)
+        prompt_tv_per_sample = prompt_tv_unique[prompt_index]
+
+    ppo_tv = prompt_tv_unique.mean()
 
     # Instead of dual-clip PPO, we use truncated importance sampling (TIS) to clip the policy loss.
     # However, a large threshold is recommended to avoid performance degradation due to the truncation bias.
@@ -1509,12 +1525,14 @@ def compute_policy_loss_tvpo(
 
     pg_losses = -advantages * truncated_ratio * log_prob
     pg_losses_detached = pg_losses.detach()
-    if ppo_tv <= clip_divergence:
-        valid_mask = torch.ones_like(ppo_tv)
+    if torch.all(prompt_tv_per_sample <= clip_divergence):
+        valid_mask = torch.ones_like(pg_losses, dtype=torch.bool)
     else:
         main_grad = advantages
         ref_grad = torch.sign(prob - old_prob)
-        valid_mask = (main_grad * ref_grad) <= 0
+        prompt_valid = prompt_tv_per_sample.unsqueeze(-1) <= clip_divergence
+        token_valid = (main_grad * ref_grad) <= 0
+        valid_mask = prompt_valid | token_valid
         pg_losses = torch.where(valid_mask, pg_losses, pg_losses_detached)
     valid_mask = valid_mask.detach().float()
 
@@ -1533,6 +1551,10 @@ def compute_policy_loss_tvpo(
         "actor/pg_clipfrac": pg_clipfrac.detach().item(),
         "actor/ppo_kl": ppo_kl.detach().item(),
         "actor/ppo_tv": ppo_tv.detach().item(),
+        "actor/ppo_tv_prompt/min": prompt_tv_unique.min().detach().item(),
+        "actor/ppo_tv_prompt/max": prompt_tv_unique.max().detach().item(),
+        "actor/ppo_tv_prompt/std": prompt_tv_unique.std(unbiased=False).detach().item(),
+        "actor/ppo_tv_prompt/hist": prompt_tv_unique.detach().cpu().tolist(),
         "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
     }
     return pg_loss, pg_metrics
@@ -1547,6 +1569,7 @@ def compute_policy_loss_dppo_kl(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for DPPO-Binary-KL.
@@ -1632,6 +1655,7 @@ def compute_policy_loss_gspo(
     loss_agg_mode: str = "seq-mean-token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for GSPO.
@@ -1708,6 +1732,7 @@ def compute_policy_loss_sapo(
     loss_agg_mode: str = "seq-mean-token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the smoothed policy objective and related metrics for SAPO.
@@ -1793,6 +1818,7 @@ def compute_policy_loss_gpg(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Adapted from
     https://github.com/AMAP-ML/GPG/blob/main/VisualThinker-R1-Zero/src/open-r1-multimodal/src/open_r1/trainer/grpo_trainer.py#L495
@@ -1829,6 +1855,7 @@ def compute_policy_loss_clip_cov(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for Clip-Cov.
@@ -1934,6 +1961,7 @@ def compute_policy_loss_kl_cov(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for Clip-Cov.
@@ -2014,6 +2042,7 @@ def compute_policy_loss_geo_mean(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for GMPO.
@@ -2100,6 +2129,7 @@ def compute_policy_loss_cispo(
     loss_agg_mode: str = "token-mean",
     config: Optional[DictConfig | ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for CISPO.
@@ -2362,6 +2392,7 @@ def compute_policy_loss_reinforce(
     loss_agg_mode: str = "seq-mean-token-sum",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: Optional[torch.Tensor] = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute REINFORCE-style policy gradient loss with optional IS correction.
 
@@ -2443,6 +2474,7 @@ def compute_policy_loss_bypass_mode(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
+    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Bypass mode policy loss supporting both REINFORCE and PPO-clip.
 

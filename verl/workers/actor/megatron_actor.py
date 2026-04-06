@@ -381,11 +381,16 @@ class MegatronPPOActor(BasePPOActor):
         if "rollout_log_probs" in data.batch.keys():
             select_keys.append("rollout_log_probs")
         self.has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
+        non_tensor_select_keys = []
         # router replay
         if self.enable_routing_replay:
             select_keys.append("routed_experts")
         if self.has_multi_modal_inputs:
-            data = data.select(select_keys, ["multi_modal_inputs"])
+            non_tensor_select_keys.append("multi_modal_inputs")
+        if "uid" in data.non_tensor_batch:
+            non_tensor_select_keys.append("uid")
+        if non_tensor_select_keys:
+            data = data.select(select_keys, non_tensor_select_keys)
         else:
             data = data.select(batch_keys=select_keys)
 
@@ -527,6 +532,7 @@ class MegatronPPOActor(BasePPOActor):
                     loss_agg_mode=loss_agg_mode,
                     config=self.config,
                     rollout_is_weights=rollout_is_weights,
+                    index=data.non_tensor_batch.get("uid"),
                 )
                 stats.update(pg_metrics)
 

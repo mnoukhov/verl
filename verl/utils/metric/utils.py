@@ -49,6 +49,8 @@ def reduce_metrics(metrics: dict[str, Union["Metric", list[Any]]]) -> dict[str, 
     for key, val in metrics.items():
         if isinstance(val, Metric):
             metrics[key] = val.aggregate()
+        elif key.endswith("/hist"):
+            metrics[key] = np.asarray(val, dtype=np.float32).reshape(-1).tolist()
         elif "max" in key:
             metrics[key] = np.max(val)
         elif "min" in key:
