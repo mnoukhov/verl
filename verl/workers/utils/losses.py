@@ -87,6 +87,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     old_log_prob = data["old_log_probs"]
     advantages = data["advantages"]
     rollout_is_weights = data.get("rollout_is_weights", None)
+    index = tu.get(data, key="uid", default=None)
 
     loss_agg_mode = config.loss_agg_mode
 
@@ -101,11 +102,15 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         loss_agg_mode=loss_agg_mode,
         config=config,
         rollout_is_weights=rollout_is_weights,
+        index=index,
     )
 
     # AggregationType.MEAN for pg metrics: assumes policy_loss_fn normalizes by local_bsz/local_tokens
     # Ex: in compute_policy_loss_vanilla, pg_metrics are pg_clipfrac, ppo_kl, pg_clipfrac_lower
-    pg_metrics = Metric.from_dict(pg_metrics, aggregation=AggregationType.MEAN)
+    scalar_pg_metrics = {key: value for key, value in pg_metrics.items() if not isinstance(value, list)}
+    list_pg_metrics = {key: value for key, value in pg_metrics.items() if isinstance(value, list)}
+    pg_metrics = Metric.from_dict(scalar_pg_metrics, aggregation=AggregationType.MEAN)
+    pg_metrics.update(list_pg_metrics)
 
     metrics.update(pg_metrics)
     metrics["actor/pg_loss"] = Metric(value=pg_loss, aggregation=metric_aggregation)
