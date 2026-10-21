@@ -1,10 +1,10 @@
 # run Qwen3-30B-A3B-Base on dapo-math-17k dataset
-set -x
+set -xeuo pipefail
 
 # ================================ DPPO Specific Parameters ===========================
 
 # Why from GRPO to DPPO?
-"""
+: <<'DPPO_BACKGROUND'
 The ratio clipping mechanism in GRPO/PPO is structurally ill-suited due to the large, 
 long-tailed vocabularies inherent to LLMs. It over-penalizes low-probability tokens 
 and under-penalizes high-probability ones, leading to training inefficiency and 
@@ -18,9 +18,9 @@ DPPO addresses this issue by using a divergence-based clipping mechanism, achiev
 superior training stability and final performance compared to existing methods.
 
 DPPO paper: https://arxiv.org/pdf/2602.04879
-"""
+DPPO_BACKGROUND
 
-LOSS_MODE=${LOSS_MODE:-"dppo_tv"}
+LOSS_MODE=${LOSS_MODE:-"tvpo"}
 
 if [[ $LOSS_MODE == "dppo_kl" ]]; then
     # The KL divergence threshold for DPPO.
@@ -38,7 +38,7 @@ elif [[ $LOSS_MODE == "vanilla" ]]; then
     clip_ratio_low=${CLIP_LOW:-0.2}
     clip_ratio_high=${CLIP_HIGH:-0.28}
 elif [[ $LOSS_MODE == "tvpo" ]]; then
-    # GRPO baseline
+    # TVPO uses clip_ratio / 2 as the TV threshold.
     clip_ratio=${CLIP_HIGH:-0.005}
     clip_ratio_low=${CLIP_LOW:-0.15}
     clip_ratio_high=${CLIP_HIGH:-0.005}
@@ -58,7 +58,14 @@ adv_estimator=grpo
 # This can not only save the computation cost, but also improve the training stability 
 # for both GRPO and DPPO by controlling the training-inference mismatch at a low level.
 # See Section 5.2 in https://arxiv.org/pdf/2602.04879 for more details.
-bypass_mode=True
+bypass_mode=${BYPASS_MODE:-True}
+rollout_loss_type=ppo_clip
+if [[ $LOSS_MODE == "tvpo" ]]; then
+    rollout_loss_type=tvpo
+elif [[ $bypass_mode == "True" && $LOSS_MODE != "vanilla" ]]; then
+    echo "Bypass correction supports tvpo or vanilla in this recipe; set BYPASS_MODE=False for DPPO." >&2
+    exit 1
+fi
 
 # We recommand using Dr.GRPO to remove the length and difficulty bias in original GRPO.
 # See Section 3.1 in https://arxiv.org/pdf/2503.20783 for more details.
@@ -163,7 +170,6 @@ ACTOR_MEGATRON_CONFIG="
     actor_rollout_ref.actor.megatron.expert_model_parallel_size=$ACTOR_EP \
     actor_rollout_ref.actor.megatron.expert_tensor_parallel_size=$ACTOR_ETP \
     actor_rollout_ref.actor.megatron.param_offload=True \
-    actor_rollout_ref.actor.megatron.grad_offload=True \
     actor_rollout_ref.actor.megatron.optimizer_offload=True \
     +actor_rollout_ref.actor.megatron.override_transformer_config.moe_router_dtype=fp32 \
     +actor_rollout_ref.actor.megatron.override_transformer_config.moe_permute_fusion=True \
@@ -215,7 +221,6 @@ CRITIC_MEGATRON_CONFIG="
     critic.megatron.expert_model_parallel_size=$CRITIC_EP \
     critic.megatron.expert_tensor_parallel_size=$CRITIC_ETP \
     critic.megatron.param_offload=True \
-    critic.megatron.grad_offload=True \
     critic.megatron.optimizer_offload=True \
     +critic.megatron.override_transformer_config.moe_router_dtype=fp32 \
     +critic.megatron.override_transformer_config.moe_permute_fusion=True \
@@ -278,7 +283,14 @@ REWARD_CONFIG="
     +reward.reward_kwargs.overlong_buffer_cfg.log=False \
     +reward.reward_kwargs.max_resp_len=${max_response_length}"
 
-/usr/bin/python -m verl.trainer.main_ppo \
+# Match upstream's environment for the driver and Ray workers.
+LAUNCH=(python3)
+RAY=(ray_kwargs.ray_init.runtime_env.py_executable=null)
+if [ "${VERL_USE_UV:-1}" != 0 ] && [ "${DEVICE:-gpu}" = gpu ]; then
+    LAUNCH=(uv run --frozen --all-packages --extra vllm --extra megatron python3)
+    RAY=(ray_kwargs.ray_init.runtime_env.py_executable="uv -v run --frozen --all-packages --extra vllm --extra megatron")
+fi
+"${LAUNCH[@]}" -m verl.trainer.main_ppo \
     --config-path=./config \
     --config-name=$CONFIG_NAME \
     algorithm.adv_estimator=$adv_estimator \
@@ -287,6 +299,7 @@ REWARD_CONFIG="
     algorithm.gamma=$gae_gamma \
     algorithm.lam=$gae_lam \
     algorithm.rollout_correction.bypass_mode=$bypass_mode \
+    algorithm.rollout_correction.loss_type=$rollout_loss_type \
     algorithm.norm_adv_by_std_in_grpo=$norm_adv_by_std_in_grpo \
     data.train_files="$TRAIN_FILE" \
     data.val_files="$TEST_FILE" \
@@ -297,7 +310,6 @@ REWARD_CONFIG="
     data.filter_overlong_prompts=False \
     data.filter_overlong_prompts_workers=64 \
     data.truncation='error' \
-    trainer.use_legacy_worker_impl=disable \
     trainer.critic_warmup=$critic_warmup \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$wandb_project_name \
@@ -314,4 +326,6 @@ REWARD_CONFIG="
     $ACTOR_CONFIG \
     $CIRITC_CONFIG \
     $ROLLOUT_CONFIG \
-    $REWARD_CONFIG
+    $REWARD_CONFIG \
+    "${RAY[@]}" \
+    "$@"

@@ -12,7 +12,7 @@ if (($# == 0)); then
         CLIP_LOW=0.2
         CLIP_HIGH=0.28
         bash
-        examples/dppo_trainer/run_qwen30b_dppo.sh
+        examples/tvpo_trainer/run_qwen3_30b_a3b_megatron.sh
     )
 else
     cmd=(env "$@")

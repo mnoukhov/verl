@@ -25,8 +25,8 @@ from verl.trainer.ppo.core_algos import (
     compute_gae_advantage_return,
     compute_grpo_outcome_advantage,
     compute_grpo_vectorized_outcome_advantage,
-    compute_policy_loss_vanilla,
     compute_policy_loss_tvpo,
+    compute_policy_loss_vanilla,
     compute_rloo_outcome_advantage,
     compute_rloo_vectorized_outcome_advantage,
     get_adv_estimator_fn,
@@ -327,6 +327,8 @@ def test_vanilla_logs_prompt_level_tv_histogram():
     config = OmegaConf.create(
         {
             "clip_ratio": 0.2,
+            "clip_ratio_low": None,
+            "clip_ratio_high": None,
             "clip_ratio_c": 3.0,
             "global_batch_info": {},
         }

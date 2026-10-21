@@ -209,9 +209,7 @@ class Tracking:
 
         if backend in {"mlflow", "tensorboard", "clearml", "console", "swanlab", "vemlp_wandb", "trackio"}:
             return {
-                key: value
-                for key, value in data.items()
-                if isinstance(value, (int, float, np.integer, np.floating))
+                key: value for key, value in data.items() if isinstance(value, int | float | np.integer | np.floating)
             }
 
         return data
@@ -584,7 +582,7 @@ class _TensorboardAdapter:
 
     def log(self, data, step):
         for key, value in data.items():
-            if isinstance(value, (int, float, np.integer, np.floating)):
+            if isinstance(value, int | float | np.integer | np.floating):
                 self.writer.add_scalar(key, value, step)
 
     def finish(self):

@@ -94,6 +94,8 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     metrics = {}
 
+    # Prompt IDs are non-tensor metadata and would be dropped by select().
+    index = tu.get(data, key="uid", default=None)
     # select fields and convert to padded tensor
     fields = ["response_mask", "old_log_probs", "advantages"]
     if "rollout_is_weights" in data:
@@ -107,7 +109,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     old_log_prob = data["old_log_probs"]
     advantages = data["advantages"]
     rollout_is_weights = data.get("rollout_is_weights", None)
-    index = tu.get(data, key="uid", default=None)
 
     loss_agg_mode = config.loss_agg_mode
 
@@ -115,6 +116,8 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     policy_loss_fn = get_policy_loss_fn(loss_mode)
     policy_loss_kwargs = {"sc_correction": sc_outputs["sc_correction"]} if sc_outputs else {}
+    if loss_mode in ("vanilla", "tvpo", "bypass_mode"):
+        policy_loss_kwargs["index"] = index
     pg_loss, pg_metrics = policy_loss_fn(
         old_log_prob=old_log_prob,
         log_prob=log_prob,
@@ -123,7 +126,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         loss_agg_mode=loss_agg_mode,
         config=config,
         rollout_is_weights=rollout_is_weights,
-        index=index,
         **policy_loss_kwargs,
     )
 
@@ -132,6 +134,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     scalar_pg_metrics = {key: value for key, value in pg_metrics.items() if not isinstance(value, list)}
     list_pg_metrics = {key: value for key, value in pg_metrics.items() if isinstance(value, list)}
     pg_metrics = Metric.from_dict(scalar_pg_metrics, aggregation=AggregationType.MEAN)
+    for key in scalar_pg_metrics:
+        if key.endswith("/min"):
+            pg_metrics[key] = Metric(value=scalar_pg_metrics[key], aggregation=AggregationType.MIN)
+        elif key.endswith("/max"):
+            pg_metrics[key] = Metric(value=scalar_pg_metrics[key], aggregation=AggregationType.MAX)
     pg_metrics.update(list_pg_metrics)
 
     metrics.update(pg_metrics)
