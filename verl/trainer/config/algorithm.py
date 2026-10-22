@@ -136,6 +136,8 @@ class RolloutCorrectionConfig(BaseConfig):
               L = -E[w * log π(a|s) * A] where w = π_current / π_rollout
             - "ppo_clip": PPO clipped objective (IS handled by ratio, no explicit weights)
               L = -E[min(r*A, clip(r)*A)] where r = π_current / π_rollout
+            - "tvpo": Prompt-level TV gradient gating with a detached truncated ratio.
+              The current/rollout ratio supplies IS; extra correction weights are not applied.
             Default: "ppo_clip"
 
         score_centering (bool): Subtract the expected score under the sampler from every token's

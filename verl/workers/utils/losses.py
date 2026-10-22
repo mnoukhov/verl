@@ -13,10 +13,18 @@
 # limitations under the License.
 
 
+from functools import partial
+
 import torch
 from tensordict import TensorDict
 
-from verl.trainer.ppo.core_algos import agg_loss, compute_value_loss, get_policy_loss_fn, kl_penalty
+from verl.trainer.ppo.core_algos import (
+    agg_loss,
+    compute_value_loss,
+    get_policy_loss_fn,
+    kl_penalty,
+    wrap_rollout_correction,
+)
 from verl.utils import tensordict_utils as tu
 from verl.utils.dataset.dataset_utils import DatasetPadMode
 from verl.utils.metric import AggregationType, Metric
@@ -94,6 +102,21 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     metrics = {}
 
+    # Bind loss-specific batch context before select() drops non-tensor metadata.
+    loss_mode = config.policy_loss.get("loss_mode", "vanilla")
+    bypass_mode = loss_mode == "bypass_mode"
+    if bypass_mode:
+        rollout_correction = config.policy_loss.get("rollout_correction")
+        if rollout_correction is not None:
+            loss_type = rollout_correction.get("loss_type", "ppo_clip")
+            if loss_type in ("ppo_clip", "tvpo"):
+                loss_mode = "vanilla" if loss_type == "ppo_clip" else loss_type
+    policy_loss_fn = get_policy_loss_fn(loss_mode)
+    if loss_mode == "tvpo":
+        policy_loss_fn = partial(policy_loss_fn, index=tu.get(data, key="uid", default=None))
+    if bypass_mode and loss_mode != "bypass_mode":
+        policy_loss_fn = wrap_rollout_correction(policy_loss_fn)
+
     # select fields and convert to padded tensor
     fields = ["response_mask", "old_log_probs", "advantages"]
     if "rollout_is_weights" in data:
@@ -110,9 +133,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     loss_agg_mode = config.loss_agg_mode
 
-    loss_mode = config.policy_loss.get("loss_mode", "vanilla")
-
-    policy_loss_fn = get_policy_loss_fn(loss_mode)
     policy_loss_kwargs = {"sc_correction": sc_outputs["sc_correction"]} if sc_outputs else {}
     pg_loss, pg_metrics = policy_loss_fn(
         old_log_prob=old_log_prob,
@@ -127,7 +147,15 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     # AggregationType.MEAN for pg metrics: assumes policy_loss_fn normalizes by local_bsz/local_tokens
     # Ex: in compute_policy_loss_vanilla, pg_metrics are pg_clipfrac, ppo_kl, pg_clipfrac_lower
-    pg_metrics = Metric.from_dict(pg_metrics, aggregation=AggregationType.MEAN)
+    scalar_pg_metrics = {key: value for key, value in pg_metrics.items() if not isinstance(value, list)}
+    list_pg_metrics = {key: value for key, value in pg_metrics.items() if isinstance(value, list)}
+    pg_metrics = Metric.from_dict(scalar_pg_metrics, aggregation=AggregationType.MEAN)
+    for key in scalar_pg_metrics:
+        if key.endswith("/min"):
+            pg_metrics[key] = Metric(value=scalar_pg_metrics[key], aggregation=AggregationType.MIN)
+        elif key.endswith("/max"):
+            pg_metrics[key] = Metric(value=scalar_pg_metrics[key], aggregation=AggregationType.MAX)
+    pg_metrics.update(list_pg_metrics)
 
     metrics.update(pg_metrics)
     metrics["actor/pg_loss"] = Metric(value=pg_loss, aggregation=metric_aggregation)

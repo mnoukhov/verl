@@ -1121,7 +1121,9 @@ def apply_bypass_mode(
     - loss_type="ppo_clip" (default): PPO clipped objective (IS handled by ratio)
     - loss_type="reinforce": REINFORCE with explicit IS weights
 
-    Both loss types benefit from rejection sampling (RS) which masks out-of-distribution samples.
+    - loss_type="tvpo": Prompt-level TV gradient gating with a detached truncated ratio
+
+    All loss types benefit from rejection sampling (RS) which masks out-of-distribution samples.
 
     Note:
         The implementation is copied from szrlee <szrlee@gmail.com>.
@@ -1140,5 +1142,5 @@ def apply_bypass_mode(
     with open_dict(policy_loss_config):
         # Pass rollout_correction config to actor for loss computation and metrics
         policy_loss_config["rollout_correction"] = rollout_corr_config
-        # Always use bypass_mode loss function which handles both loss_types
+        # Dispatch through bypass_mode, including TVPO selected by loss_type
         policy_loss_config["loss_mode"] = "bypass_mode"
