@@ -15,6 +15,7 @@
 """TVPO gradients and prompt metadata through the shared engine loss interface."""
 
 from dataclasses import replace
+from functools import partial
 
 import numpy as np
 import pytest
@@ -23,7 +24,7 @@ from omegaconf import OmegaConf
 from tensordict import TensorDict
 
 from verl import DataProto
-from verl.trainer.ppo.core_algos import compute_policy_loss_bypass_mode, compute_policy_loss_tvpo
+from verl.trainer.ppo.core_algos import compute_policy_loss_tvpo, wrap_rollout_correction
 from verl.trainer.ppo.rollout_corr_helper import (
     apply_bypass_mode,
     compute_rollout_correction_and_rejection_mask,
@@ -47,13 +48,14 @@ def _config(loss_mode="tvpo", **correction):
 
 
 @pytest.mark.parametrize("bypass", [False, True])
-def test_engine_keeps_prompt_ids_through_packing_and_correction(bypass):
+@pytest.mark.parametrize("loss_mode", ["tvpo", "vanilla"])
+def test_engine_binds_prompt_ids_only_for_tvpo(bypass, loss_mode):
     # One response has TV=.6 and one has TV=0: the shared prompt is below .4.
     # Dropping uid gates the first response and therefore changes its gradient.
     ratios = torch.tensor([[2.2, 2.2], [1.0, 1.0]])
     leaf = ratios.log().requires_grad_()
     old = torch.full_like(leaf, -3.0)
-    config = _config("bypass_mode" if bypass else "tvpo", loss_type="tvpo")
+    config = _config("bypass_mode" if bypass else loss_mode, loss_type="tvpo" if loss_mode == "tvpo" else "ppo_clip")
     data = TensorDict(
         {
             "prompts": torch.zeros(2, 1, dtype=torch.long),
@@ -78,11 +80,16 @@ def test_engine_keeps_prompt_ids_through_packing_and_correction(bypass):
     loss, metrics = ppo_loss(config, {"log_probs": packed}, data)
     loss.backward()
     weights = 1.0 if bypass else torch.tensor([[0.5, 0.5], [1.5, 1.5]])
-    torch.testing.assert_close(leaf.grad, -ratios.clamp(max=2) * weights / 4)
-    assert metrics["actor/ppo_tv"].aggregate() == pytest.approx(0.3)
-    assert metrics["actor/ppo_tv_prompt/hist"] == pytest.approx([0.3])
-    assert metrics["actor/ppo_tv_prompt/min"].aggregation == AggregationType.MIN
-    assert metrics["actor/ppo_tv_prompt/max"].aggregation == AggregationType.MAX
+    if loss_mode == "tvpo":
+        torch.testing.assert_close(leaf.grad, -ratios.clamp(max=2) * weights / 4)
+        assert metrics["actor/ppo_tv"].aggregate() == pytest.approx(0.3)
+        assert metrics["actor/ppo_tv_prompt/hist"] == pytest.approx([0.3])
+        assert metrics["actor/ppo_tv_prompt/min"].aggregation == AggregationType.MIN
+        assert metrics["actor/ppo_tv_prompt/max"].aggregation == AggregationType.MAX
+    else:
+        # Ordinary PPO accepts no prompt metadata and retains its original clipping.
+        torch.testing.assert_close(leaf.grad, -torch.tensor([[0.0, 0.0], [1.0, 1.0]]) * weights / 4)
+        assert not any("tv" in key for key in metrics)
 
 
 @pytest.mark.parametrize("rollout_is", [None, "token", "sequence"])
@@ -117,13 +124,13 @@ def test_bypass_tvpo_applies_rejection_without_double_weighting(rollout_is):
     )
     assert effective_mask[0, 0] == 0
     index = np.array(["a", "a"])
-    loss, metrics = compute_policy_loss_bypass_mode(
+    loss_fn = wrap_rollout_correction(partial(compute_policy_loss_tvpo, index=index))
+    loss, metrics = loss_fn(
         old,
         current,
         advantages,
         mask,
         config=config,
-        index=index,
         rollout_is_weights=torch.full_like(mask, 42.0),
     )
     expected, _ = compute_policy_loss_tvpo(

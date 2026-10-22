@@ -13,10 +13,18 @@
 # limitations under the License.
 
 
+from functools import partial
+
 import torch
 from tensordict import TensorDict
 
-from verl.trainer.ppo.core_algos import agg_loss, compute_value_loss, get_policy_loss_fn, kl_penalty
+from verl.trainer.ppo.core_algos import (
+    agg_loss,
+    compute_value_loss,
+    get_policy_loss_fn,
+    kl_penalty,
+    wrap_rollout_correction,
+)
 from verl.utils import tensordict_utils as tu
 from verl.utils.dataset.dataset_utils import DatasetPadMode
 from verl.utils.metric import AggregationType, Metric
@@ -94,8 +102,21 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     metrics = {}
 
-    # Prompt IDs are non-tensor metadata and would be dropped by select().
-    index = tu.get(data, key="uid", default=None)
+    # Bind loss-specific batch context before select() drops non-tensor metadata.
+    loss_mode = config.policy_loss.get("loss_mode", "vanilla")
+    bypass_mode = loss_mode == "bypass_mode"
+    if bypass_mode:
+        rollout_correction = config.policy_loss.get("rollout_correction")
+        if rollout_correction is not None:
+            loss_type = rollout_correction.get("loss_type", "ppo_clip")
+            if loss_type in ("ppo_clip", "tvpo"):
+                loss_mode = "vanilla" if loss_type == "ppo_clip" else loss_type
+    policy_loss_fn = get_policy_loss_fn(loss_mode)
+    if loss_mode == "tvpo":
+        policy_loss_fn = partial(policy_loss_fn, index=tu.get(data, key="uid", default=None))
+    if bypass_mode and loss_mode != "bypass_mode":
+        policy_loss_fn = wrap_rollout_correction(policy_loss_fn)
+
     # select fields and convert to padded tensor
     fields = ["response_mask", "old_log_probs", "advantages"]
     if "rollout_is_weights" in data:
@@ -112,12 +133,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     loss_agg_mode = config.loss_agg_mode
 
-    loss_mode = config.policy_loss.get("loss_mode", "vanilla")
-
-    policy_loss_fn = get_policy_loss_fn(loss_mode)
     policy_loss_kwargs = {"sc_correction": sc_outputs["sc_correction"]} if sc_outputs else {}
-    if loss_mode in ("vanilla", "tvpo", "bypass_mode"):
-        policy_loss_kwargs["index"] = index
     pg_loss, pg_metrics = policy_loss_fn(
         old_log_prob=old_log_prob,
         log_prob=log_prob,

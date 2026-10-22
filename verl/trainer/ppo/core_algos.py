@@ -22,6 +22,7 @@ __all__ = ["register_adv_est", "get_adv_estimator_fn", "AdvantageEstimator"]
 
 from collections import defaultdict
 from enum import Enum
+from functools import partial
 from typing import Any, Callable, Optional
 
 import numpy as np
@@ -1317,7 +1318,6 @@ def compute_policy_loss_vanilla(
     loss_agg_mode: str = "token-mean",
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
-    index: np.ndarray | torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """
     Compute the clipped policy objective and related metrics for PPO.
@@ -1365,8 +1365,6 @@ def compute_policy_loss_vanilla(
     negative_approx_kl = torch.clamp(negative_approx_kl, min=-20.0, max=20.0)
     ratio = torch.exp(negative_approx_kl)
     ppo_kl = verl_F.masked_mean(-negative_approx_kl, response_mask)
-    _, prompt_tv_unique = _compute_prompt_tv(ratio, response_mask, index)
-    ppo_tv = prompt_tv_unique.mean()
 
     pg_losses1 = -advantages * ratio
     if cliprange_low is None:
@@ -1400,11 +1398,6 @@ def compute_policy_loss_vanilla(
     pg_metrics = {
         "actor/pg_clipfrac": pg_clipfrac.detach().item(),
         "actor/ppo_kl": ppo_kl.detach().item(),
-        "actor/ppo_tv": ppo_tv.detach().item(),
-        "actor/ppo_tv_prompt/min": prompt_tv_unique.min().detach().item(),
-        "actor/ppo_tv_prompt/max": prompt_tv_unique.max().detach().item(),
-        "actor/ppo_tv_prompt/std": prompt_tv_unique.std(unbiased=False).detach().item(),
-        "actor/ppo_tv_prompt/hist": prompt_tv_unique.detach().cpu().tolist(),
         "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
     }
     return pg_loss, pg_metrics
@@ -2539,6 +2532,16 @@ def compute_policy_loss_reinforce(
     return pg_loss, pg_metrics
 
 
+def wrap_rollout_correction(policy_loss_fn):
+    """Apply bypass correction around a policy loss with its context already bound.
+
+    The wrapped loss receives the rejection mask and no extra IS weights: its
+    current-to-rollout ratio already supplies importance weighting. Prompt IDs
+    and other loss-specific context stay inside the supplied callable.
+    """
+    return partial(compute_policy_loss_bypass_mode, policy_loss_fn=policy_loss_fn)
+
+
 @register_policy_loss("bypass_mode")
 def compute_policy_loss_bypass_mode(
     old_log_prob: torch.Tensor,
@@ -2549,7 +2552,7 @@ def compute_policy_loss_bypass_mode(
     config: Optional[ActorConfig] = None,
     rollout_is_weights: torch.Tensor | None = None,
     sc_correction: Optional[torch.Tensor] = None,
-    index: np.ndarray | torch.Tensor | None = None,
+    policy_loss_fn: Optional[Callable[..., tuple[torch.Tensor, dict[str, Any]]]] = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Bypass mode policy loss supporting REINFORCE, PPO-clip, and TVPO.
 
@@ -2587,6 +2590,8 @@ def compute_policy_loss_bypass_mode(
         config: Actor config containing rollout_correction settings in policy_loss.
         rollout_is_weights: Pre-computed IS weights (ignored, computed internally).
         sc_correction: Score-centering term from the logits processor; only with loss_type="reinforce".
+        policy_loss_fn: Optional bound policy loss for ratio-based objectives.
+            Normally supplied by wrap_rollout_correction(); otherwise selected from loss_type.
 
     Config options (in config.policy_loss.rollout_correction):
         loss_type: "ppo_clip" (default), "reinforce", or "tvpo"
@@ -2664,7 +2669,8 @@ def compute_policy_loss_bypass_mode(
     elif loss_type in ("ppo_clip", "tvpo"):
         # PPO-clip and TVPO already contain the current/rollout ratio.
         # Applying correction weights again would double-count importance sampling.
-        policy_loss_fn = get_policy_loss_fn("tvpo" if loss_type == "tvpo" else "vanilla")
+        if policy_loss_fn is None:
+            policy_loss_fn = get_policy_loss_fn("tvpo" if loss_type == "tvpo" else "vanilla")
         pg_loss, pg_metrics = policy_loss_fn(
             old_log_prob=rollout_log_prob,  # = old_log_prob in bypass mode
             log_prob=log_prob,
@@ -2673,7 +2679,6 @@ def compute_policy_loss_bypass_mode(
             loss_agg_mode=loss_agg_mode,
             config=config,
             rollout_is_weights=None,  # Both objectives already contain the current/rollout ratio.
-            index=index,
         )
 
     else:
